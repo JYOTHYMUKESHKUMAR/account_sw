@@ -23,11 +23,13 @@ from django.http import HttpResponseRedirect
 from django.utils.translation import gettext_lazy as _
 from collections import defaultdict
 from datetime import timedelta
+from django.db.models.signals import post_save
+from django.dispatch import receiver
 from django.utils import timezone
 from import_export.admin import ImportExportModelAdmin, ExportActionMixin
 from import_export import fields, resources,widgets
 from django.contrib.auth.decorators import user_passes_test
-from .models import Category, Product,  UpdateCashIn, UpdateCashOut, AvailableBalance,Dashboard, Summary,UserActionLog
+from .models import Category, Product,  UpdateCashIn, UpdateCashOut, AvailableBalance,Dashboard, Summary,ProjectSummary,UserActionLog
 
 
 class UpdateCashInInline(admin.TabularInline):
@@ -71,7 +73,7 @@ class UpdateCashInAdmin(ImportExportModelAdmin, ExportActionMixin):
     resource_class = UpdateCashInResource
     list_display = ['date', 'income_source','project', 'cost_center', 'cash_in', 'status', 'remark']
     search_fields = ['income_source', 'date', 'project', 'cost_center']
-    list_filter = ['date','status', 'cost_center']
+    list_filter = ['date','status', 'project','cost_center']
     ordering = ['-date']
     form = UpdateCashInAdminForm
     
@@ -213,7 +215,7 @@ class UpdateCashOutAdmin(ImportExportModelAdmin, ExportActionMixin):
     resource_class = UpdateCashOutResource
     list_display = ['date', 'expense_source','project', 'cost_center', 'cash_out', 'status', 'remark',  'formatted_priority']
     search_fields = ['expense_source', 'date', 'project', 'cost_center']
-    list_filter = ['date','status', 'priority_level', 'cost_center']
+    list_filter = ['date','status', 'priority_level','project', 'cost_center']
     ordering = ['-date']
     form = UpdateCashOutAdminForm
 
@@ -644,6 +646,55 @@ class SummaryAdmin(ImportExportModelAdmin, ExportActionMixin):
         # If it's not the first row, update the actual_balance and planned_balance
         if obj.id:
             self.update_balance(obj)
+
+@receiver(post_save, sender=UpdateCashIn)
+@receiver(post_save, sender=UpdateCashOut)
+def update_project_summary(sender, instance, created, **kwargs):
+    if created:
+        # Calculate cash flow based on the instance
+        cash_flow = instance.cash_in if isinstance(instance, UpdateCashIn) else -instance.cash_out
+        
+        # Update or create the ProjectSummary record
+        project_summary, _ = ProjectSummary.objects.get_or_create(
+            date=instance.date,
+            project=instance.project,
+            defaults={
+                'cash_in': cash_flow if cash_flow > 0 else 0,
+                'cash_out': -cash_flow if cash_flow < 0 else 0,
+                'balance': cash_flow,
+            }
+        )
+    else:
+        # Update the existing ProjectSummary record if the instance is not new
+        project_summary = ProjectSummary.objects.filter(
+            date=instance.date,
+            project=instance.project
+        ).first()
+
+        if project_summary:
+            # Recalculate cash flow based on all related UpdateCashIn and UpdateCashOut instances
+            cash_in_total = UpdateCashIn.objects.filter(date=instance.date, project=instance.project).aggregate(total=models.Sum('cash_in'))['total'] or 0
+            cash_out_total = UpdateCashOut.objects.filter(date=instance.date, project=instance.project).aggregate(total=models.Sum('cash_out'))['total'] or 0
+            cash_flow = cash_in_total - cash_out_total
+
+            # Update the ProjectSummary record
+            project_summary.cash_in = cash_in_total
+            project_summary.cash_out = cash_out_total
+            project_summary.balance = cash_flow
+            project_summary.save()
+class ProjectSummaryAdmin(admin.ModelAdmin):
+    list_display = ('date', 'project', 'cash_in', 'cash_out', 'balance')
+    list_filter = ('date', 'project')
+    search_fields = ('project',)
+    list_filter = ('project',('date',DateRangeFilter),TransactionTypeFilter,)
+
+    def has_add_permission(self, request):
+        return False  # Disable adding new ProjectSummary objects
+
+    def has_delete_permission(self, request, obj=None):
+        return False  # Disable deleting ProjectSummary objects
+
+
 class UserActionLogAdmin(admin.ModelAdmin):
     list_display = ['user', 'action_time', 'action_description']
     search_fields = ['user__username', 'action_description']
@@ -657,3 +708,4 @@ admin.site.register(AvailableBalance, AvailableBalanceAdmin)
 admin.site.register(Summary, SummaryAdmin) 
 admin.site.register(Dashboard, DashboardAdmin)
 admin.site.register(UserActionLog, UserActionLogAdmin)
+admin.site.register(ProjectSummary, ProjectSummaryAdmin)

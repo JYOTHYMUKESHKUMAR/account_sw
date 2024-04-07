@@ -149,6 +149,26 @@ class Summary(models.Model):
     def __str__(self):
 
         return f'Summary for {self.date}'
+from django.db import models
+from django.db.models import Sum
+
+class ProjectSummary(models.Model):
+    date = models.DateField()
+    project = models.CharField(max_length=250)
+    cash_in = models.DecimalField(max_digits=10, decimal_places=2, default=0.0)
+    cash_out = models.DecimalField(max_digits=10, decimal_places=2, default=0.0)
+    balance = models.DecimalField(max_digits=10, decimal_places=2, default=0.0)
+
+class ProjectSummary(models.Model):
+    date = models.DateField()
+    project = models.CharField(max_length=250)
+    cash_in = models.DecimalField(max_digits=10, decimal_places=2)
+    cash_out = models.DecimalField(max_digits=10, decimal_places=2)
+    balance = models.DecimalField(max_digits=10, decimal_places=2)
+
+    def __str__(self):
+        return f"ProjectSummary - {self.date} - {self.project}"
+
 
 class UserActionLog(models.Model):
     user = models.ForeignKey(User, related_name='cashflow_user_action_logs', on_delete=models.CASCADE)
