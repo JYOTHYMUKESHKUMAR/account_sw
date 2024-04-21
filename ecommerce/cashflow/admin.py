@@ -12,6 +12,7 @@ from rangefilter.filters import (
 from django.db import models
 
 from django.db.models import Sum
+from decimal import Decimal
 import csv
 from django.shortcuts import render
 from django.urls import path
@@ -52,7 +53,7 @@ class UpdateCashInResource(resources.ModelResource):
     )
     class Meta:
         model = UpdateCashIn
-        fields = ('id', 'date', 'income_source','project','cost_center', 'cash_in', 'status', 'remark') 
+        fields = ('id', 'date', 'income_source','project','cost_center', 'cash_in', 'service_date','status', 'remark') 
         export_order = fields # Include 'id' in the fields for import
     def before_import_row(self, row, **kwargs):
         # Disable date validation to allow importing all data
@@ -71,7 +72,7 @@ class UpdateCashInAdminForm(forms.ModelForm):
 
 class UpdateCashInAdmin(ImportExportModelAdmin, ExportActionMixin):
     resource_class = UpdateCashInResource
-    list_display = ['date', 'income_source','project', 'cost_center', 'cash_in', 'status', 'remark']
+    list_display = ['date', 'income_source','project', 'cost_center', 'cash_in', 'service_date','status', 'remark']
     search_fields = ['income_source', 'date', 'project', 'cost_center']
     list_filter = ['date','status', 'project','cost_center']
     ordering = ['-date']
@@ -88,7 +89,7 @@ class UpdateCashInAdmin(ImportExportModelAdmin, ExportActionMixin):
 
         # Delete all records from Summary model
         Summary.objects.all().delete()
-
+        ProjectSummary.objects.all().delete()
         self.message_user(request, "DELETE ALL RECORD")
 
     delete_all_data_action.short_description = "Delete all records"
@@ -193,7 +194,7 @@ class UpdateCashOutResource(resources.ModelResource):
 
     class Meta:
         model = UpdateCashOut
-        fields = ('id', 'date', 'expense_source', 'project','cost_center','cash_out', 'status', 'remark')
+        fields = ('id', 'date', 'expense_source', 'project','cost_center','cash_out', 'service_date','status', 'remark')
         export_order = fields  # Include 'id' in the fields for import
     def before_import_row(self, row, **kwargs):
         # Disable date validation to allow importing all data
@@ -213,7 +214,7 @@ class UpdateCashOutAdminForm(forms.ModelForm):
 
 class UpdateCashOutAdmin(ImportExportModelAdmin, ExportActionMixin):
     resource_class = UpdateCashOutResource
-    list_display = ['date', 'expense_source','project', 'cost_center', 'cash_out', 'status', 'remark',  'formatted_priority']
+    list_display = ['date', 'expense_source','project', 'cost_center', 'cash_out', 'service_date','status', 'remark',  'formatted_priority']
     search_fields = ['expense_source', 'date', 'project', 'cost_center']
     list_filter = ['date','status', 'priority_level','project', 'cost_center']
     ordering = ['-date']
@@ -241,6 +242,7 @@ class UpdateCashOutAdmin(ImportExportModelAdmin, ExportActionMixin):
 
         # Delete all records from Summary model
         Summary.objects.all().delete()
+        ProjectSummary.objects.all().delete()
 
         self.message_user(request, "DELETE ALL RECORD")
 
@@ -431,7 +433,7 @@ class TransactionTypeFilter(admin.SimpleListFilter):
         )
 
     def queryset(self, request, queryset):
-        print("Filtering by:", self.value())
+        
         date_gte = request.GET.get('date__gte')
         if date_gte:
             date_gte = timezone.now().date() - timedelta(days=7)  # Modify this as needed
@@ -611,6 +613,7 @@ class SummaryAdmin(ImportExportModelAdmin, ExportActionMixin):
 
         # Delete all records from Summary model
         Summary.objects.all().delete()
+        ProjectSummary.objects.all().delete()
         
 
         self.message_user(request, "DELETE ALL RECORD")
@@ -646,53 +649,116 @@ class SummaryAdmin(ImportExportModelAdmin, ExportActionMixin):
         # If it's not the first row, update the actual_balance and planned_balance
         if obj.id:
             self.update_balance(obj)
-
 @receiver(post_save, sender=UpdateCashIn)
 @receiver(post_save, sender=UpdateCashOut)
 def update_project_summary(sender, instance, created, **kwargs):
     if created:
         # Calculate cash flow based on the instance
         cash_flow = instance.cash_in if isinstance(instance, UpdateCashIn) else -instance.cash_out
-        
-        # Update or create the ProjectSummary record
-        project_summary, _ = ProjectSummary.objects.get_or_create(
+
+        # Create a new ProjectSummary record for the specific date and project
+        ProjectSummary.objects.create(
+            date=instance.date,
+            project=instance.project,
+            cash_in=cash_flow if cash_flow > 0 else 0,
+            cash_out=-cash_flow if cash_flow < 0 else 0,
+            service_date=instance.service_date,
+            balance=cash_flow
+        )
+    else:
+        # Retrieve all UpdateCashIn and UpdateCashOut instances for the specific date and project
+        cash_in_transactions = UpdateCashIn.objects.filter(date=instance.date, project=instance.project)
+        cash_out_transactions = UpdateCashOut.objects.filter(date=instance.date, project=instance.project)
+
+        # Calculate the total cash in and cash out for the specific date and project
+        cash_in_total = cash_in_transactions.aggregate(total_cash_in=Sum('cash_in'))['total_cash_in'] or 0
+        cash_out_total = cash_out_transactions.aggregate(total_cash_out=Sum('cash_out'))['total_cash_out'] or 0
+
+        # Calculate the balance
+        balance = cash_in_total - cash_out_total
+
+        # Update or create the ProjectSummary record for the specific date and project
+        project_summary, _ = ProjectSummary.objects.update_or_create(
             date=instance.date,
             project=instance.project,
             defaults={
-                'cash_in': cash_flow if cash_flow > 0 else 0,
-                'cash_out': -cash_flow if cash_flow < 0 else 0,
-                'balance': cash_flow,
+                'cash_in': cash_in_total,
+                'cash_out': cash_out_total,
+                
+                'balance': balance,
             }
         )
-    else:
-        # Update the existing ProjectSummary record if the instance is not new
-        project_summary = ProjectSummary.objects.filter(
-            date=instance.date,
-            project=instance.project
-        ).first()
-
-        if project_summary:
-            # Recalculate cash flow based on all related UpdateCashIn and UpdateCashOut instances
-            cash_in_total = UpdateCashIn.objects.filter(date=instance.date, project=instance.project).aggregate(total=models.Sum('cash_in'))['total'] or 0
-            cash_out_total = UpdateCashOut.objects.filter(date=instance.date, project=instance.project).aggregate(total=models.Sum('cash_out'))['total'] or 0
-            cash_flow = cash_in_total - cash_out_total
-
-            # Update the ProjectSummary record
-            project_summary.cash_in = cash_in_total
-            project_summary.cash_out = cash_out_total
-            project_summary.balance = cash_flow
-            project_summary.save()
+    
 class ProjectSummaryAdmin(admin.ModelAdmin):
-    list_display = ('date', 'project', 'cash_in', 'cash_out', 'balance')
-    list_filter = ('date', 'project')
+    list_display = ('date', 'project', 'service_date', 'cash_in', 'cash_out', 'balance')
+    list_filter = ('date', 'project', 'service_date')
     search_fields = ('project',)
-    list_filter = ('project',('date',DateRangeFilter),TransactionTypeFilter,)
+    list_filter = ('project',('date',DateRangeFilter),('service_date',DateRangeFilter),TransactionTypeFilter,)
 
+    
     def has_add_permission(self, request):
-        return False  # Disable adding new ProjectSummary objects
-
+        return False
+    
     def has_delete_permission(self, request, obj=None):
-        return False  # Disable deleting ProjectSummary objects
+        return False
+    change_list_template = 'admin/cashflow/project_summary_change_list.html'
+
+
+
+
+    def changelist_view(self, request, extra_context=None):
+    # Calculate total cash in, total cash out, and balance
+        total_cash_in = Decimal(ProjectSummary.objects.aggregate(total_cash_in=Sum('cash_in'))['total_cash_in'] or 0)
+        total_cash_out = Decimal(ProjectSummary.objects.aggregate(total_cash_out=Sum('cash_out'))['total_cash_out'] or 0)
+        balance = total_cash_in - total_cash_out
+
+        # Initialize actual balance
+        actual_balance = balance
+
+        if request.method == 'POST':
+            # Get start inventory and end inventory from the form
+            start_inventory = Decimal(request.POST.get('start_inventory', 0))
+            end_inventory = Decimal(request.POST.get('end_inventory', 0))
+
+            # Calculate actual balance
+            actual_balance = balance - start_inventory + end_inventory
+
+        # Prepare the extra context with the calculated values
+        extra_context = extra_context or {}
+        extra_context['total_cash_in'] = total_cash_in
+        extra_context['total_cash_out'] = total_cash_out
+        extra_context['balance'] = balance
+        extra_context['actual_balance'] = actual_balance
+
+        # Render the changelist view with the extra context
+        return super().changelist_view(request, extra_context=extra_context)
+        def changelist_view(self, request, extra_context=None):
+            # Calculate total cash in, total cash out, and balance
+            total_cash_in = ProjectSummary.objects.aggregate(total_cash_in=Sum('cash_in'))['total_cash_in'] or 0
+            total_cash_out = ProjectSummary.objects.aggregate(total_cash_out=Sum('cash_out'))['total_cash_out'] or 0
+            balance = total_cash_in - total_cash_out
+
+            # Initialize actual balance
+            actual_balance = balance
+
+            if request.method == 'POST':
+                # Get start inventory and end inventory from the form
+                start_inventory = float(request.POST.get('start_inventory', 0))
+                end_inventory = float(request.POST.get('end_inventory', 0))
+
+                # Calculate actual balance
+                actual_balance = balance - start_inventory + end_inventory
+
+            # Prepare the extra context with the calculated values
+            extra_context = extra_context or {}
+            extra_context['total_cash_in'] = total_cash_in
+            extra_context['total_cash_out'] = total_cash_out
+            extra_context['balance'] = balance
+            extra_context['actual_balance'] = actual_balance
+
+            # Render the changelist view with the extra context
+            return super().changelist_view(request, extra_context=extra_context)
+
 
 
 class UserActionLogAdmin(admin.ModelAdmin):

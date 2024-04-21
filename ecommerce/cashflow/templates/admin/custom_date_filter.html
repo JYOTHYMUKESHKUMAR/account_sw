@@ -1,18 +1,34 @@
-{% load i18n admin_static %}
-<div id="date-filter">
-    <h3>{% trans "Date" %}</h3>
-    <ul class="filter-list">
-        {% for choice in choices %}
-            <li>
-                <a href="{{ choice.query_string|iriencode }}">{{ choice.display }}</a>
-            </li>
-        {% endfor %}
-        <li>
-            <a href="#" class="date-picker-trigger">{% trans "Custom Date" %}</a>
-            <div id="date-picker-container" style="display:none;">
-                <input type="date" name="custom_date" id="custom-date-picker">
-                <a href="{{ reset_link }}" id="clear-custom-date">{% trans "Clear" %}</a>
-            </div>
-        </li>
-    </ul>
+{% extends "admin/base_site.html" %}
+{% load static %}
+
+{% block content %}
+<div id="content-main">
+    <form method="post" action="{% url 'admin:cashflow_projectsummary_start_end_inventory' %}">
+        {% csrf_token %}
+        <label for="start_inventory">Start Inventory:</label>
+        <input type="number" id="start_inventory" name="start_inventory" required>
+        <br>
+        <label for="end_inventory">End Inventory:</label>
+        <input type="number" id="end_inventory" name="end_inventory" required>
+        <br>
+        <input type="submit" value="Submit">
+    </form>
+    <br>
+    <div>
+        <h3>Total Cashin: {{ total_cash_in }}</h3>
+        <h3>Total Cashout: {{ total_cash_out }}</h3>
+        <h3>Balance: {{ balance }}</h3>
+        <h3>Actual Balance: {{ actual_balance }}</h3>
+    </div>
+    <div>
+        {% if cl %}
+        <div class="module">
+            <table id="result_list">
+                <!-- Your existing project summary table -->
+                {{ cl.result_list|safe }}
+            </table>
+        </div>
+        {% endif %}
+    </div>
 </div>
+{% endblock %}

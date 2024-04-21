@@ -1,0 +1,31 @@
+{% extends "admin/change_list.html" %}
+{% block content %}
+<div id="content-main">
+    <!-- Display total cash in, total cash out, balance, and actual balance -->
+    <div>
+        <h2>Total Cash In: {{ total_cash_in }}</h2>
+        <h2>Total Cash Out: {{ total_cash_out }}</h2>
+        <h2>Balance: {{ balance }}</h2>
+    </div>
+
+    <!-- Form to input start inventory and end inventory -->
+    <form action="" method="post">
+        {% csrf_token %}
+        <label for="start_inventory">Start Inventory:</label>
+        <input type="text" id="start_inventory" name="start_inventory">
+        <br>
+        <label for="end_inventory">End Inventory:</label>
+        <input type="text" id="end_inventory" name="end_inventory">
+        <br>
+        <input type="submit" value="Submit">
+    </form>
+
+    <!-- Display actual balance -->
+    <h2>Actual Balance: {{ actual_balance }}</h2>
+
+    <!-- Display the default changelist table -->
+   
+    
+    {{ block.super }}
+    {% endblock %}
+    
